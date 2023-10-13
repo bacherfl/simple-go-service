@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/bacherfl/simple-go-service/metrics"
+	"golang.org/x/time/rate"
 	"strconv"
 	"time"
 
@@ -24,12 +25,21 @@ type ServiceInfo struct {
 	Version string `json:"version"`
 }
 
+var rateLimiter *rate.Limiter
+
 func serveHTTP(w http.ResponseWriter, r *http.Request) {
 	resp := ServiceInfo{Version: Version}
 
 	responseTimeInt, _ := strconv.Atoi(ResponseTimeSeconds)
 
 	<-time.After(time.Duration(responseTimeInt) * time.Second)
+
+	if rateLimiter != nil {
+		err := rateLimiter.Wait(r.Context())
+		if err != nil {
+			log.Println("Error while waiting for rate limiter: " + err.Error())
+		}
+	}
 
 	payload, _ := json.Marshal(resp)
 
@@ -52,6 +62,14 @@ func main() {
 	if !found || port == "" {
 		port = "9000"
 	}
+	if maxRequestsPerSecondStr := os.Getenv("MAX_REQUESTS_PER_SECOND"); maxRequestsPerSecondStr != "" {
+		maxRequestsPerSecond, err := strconv.ParseInt(maxRequestsPerSecondStr, 10, 32)
+		if err != nil {
+			log.Println("Could not apply rate limit value of " + maxRequestsPerSecondStr + ": " + err.Error())
+		}
+		rateLimiter = rate.NewLimiter(rate.Limit(maxRequestsPerSecond), 20)
+	}
+
 	log.Printf("going to serve on port %s", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), router); err != nil {
 		log.Fatal(err)
